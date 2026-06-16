@@ -11,7 +11,8 @@ gráficos y la tabla al vuelo.
    con el enlace”** → **Copiar enlace**.
 2. Abre `tablero.html`, pega el enlace en **“Conectar con los datos de OneDrive”**
    y pulsa **Conectar**. El enlace se **recuerda** en ese navegador, así que la
-   próxima vez carga solo.
+   próxima vez carga solo. También puedes pegar/actualizar el enlace en cualquier
+   momento desde el campo **“Vincular”** de la barra superior.
 3. Usa **“Copiar enlace del tablero”** para obtener una URL del tablero con el
    enlace ya incluido (`...#data=...`) y compartirla con tu equipo.
 

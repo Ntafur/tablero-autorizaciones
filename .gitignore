@@ -1,5 +1,9 @@
-# Datos de origen (contienen información sensible: documentos de usuario, etc.)
+# Excel: por defecto NO se versiona (puede contener datos sensibles)
 *.xlsx
+# ...salvo el anonimizado que consume el tablero:
+!datos_tablero.xlsx
+
+# Otros datos de origen
 *.xls
 *.csv
 

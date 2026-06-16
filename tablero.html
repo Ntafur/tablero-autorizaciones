@@ -100,6 +100,7 @@
   .gate .url{display:flex;gap:8px;margin-top:12px}
   .gate .url input{flex:1;padding:9px 11px;border:1px solid var(--line);border-radius:9px;font-size:13px}
   .gate .err{color:#991b1b;background:#fee2e2;border:1px solid #fecaca;border-radius:9px;padding:10px 12px;font-size:13px;margin-bottom:12px;text-align:left;display:none}
+  .gate .hint{font-size:12px;color:var(--muted);margin:10px 0 6px;text-align:left;line-height:1.5}
   .hidden{display:none!important}
 
   @media (max-width:1024px){.filters{grid-template-columns:repeat(3,1fr)}.kpis{grid-template-columns:repeat(3,1fr)}}
@@ -118,18 +119,22 @@
         <p id="gateStatus">Descargando el Excel desde el repositorio de GitHub…</p>
       </div>
       <div id="gateManual" class="hidden">
-        <h2>Cargar el archivo de datos</h2>
-        <p>No se pudo descargar automáticamente. Arrastra el Excel o selecciónalo;
-           también puedes indicar una URL.</p>
+        <h2>Conectar con los datos de OneDrive</h2>
+        <p>Pega el enlace para <b>compartir</b> del archivo Excel en OneDrive. Se recordará en este navegador.</p>
         <div id="gateErr" class="err"></div>
-        <div class="dropzone" id="dropzone">
-          <p style="margin:0 0 8px">📄 Arrastra aquí el archivo <b>.xlsx</b></p>
-          <button class="btn primary" id="pickBtn" type="button">Seleccionar archivo…</button>
-          <input type="file" id="fileInput" accept=".xlsx,.xls" class="hidden">
-        </div>
         <div class="url">
-          <input type="text" id="urlInput" placeholder="https://…/datos_tablero.xlsx">
-          <button class="btn" id="urlBtn" type="button">Cargar URL</button>
+          <input type="text" id="odInput" placeholder="https://…sharepoint.com/…  o  https://1drv.ms/…">
+          <button class="btn primary" id="odBtn" type="button">Conectar</button>
+        </div>
+        <p class="hint">Por seguridad, el navegador puede bloquear la descarga directa desde OneDrive (CORS).
+           Si pasa, usa <b>“Abrir y descargar”</b> y luego arrastra el archivo aquí abajo.</p>
+        <div id="odOpen" class="hidden" style="margin:8px 0">
+          <a class="btn" id="odOpenLink" target="_blank" rel="noopener">Abrir y descargar desde OneDrive ↗</a>
+        </div>
+        <div class="dropzone" id="dropzone">
+          <p style="margin:0 0 8px">📄 O arrastra aquí el archivo <b>.xlsx</b></p>
+          <button class="btn" id="pickBtn" type="button">Seleccionar archivo…</button>
+          <input type="file" id="fileInput" accept=".xlsx,.xls" class="hidden">
         </div>
       </div>
     </div>
@@ -140,13 +145,15 @@
     <header class="topbar">
       <div>
         <h1>Tablero de Autorizaciones</h1>
-        <p>Relación de facturas con cierre · datos cargados desde el repositorio</p>
+        <p>Relación de facturas con cierre · datos enlazados desde OneDrive</p>
       </div>
       <div class="badges" id="headerBadges"></div>
     </header>
 
     <div class="src">
       <span class="src-chip" id="srcChip"></span>
+      <button class="btn" id="shareBtn" type="button" style="display:none">Copiar enlace del tablero</button>
+      <button class="btn" id="forgetBtn" type="button" style="display:none">Olvidar OneDrive</button>
       <button class="btn" id="reloadBtn" type="button">Cargar otro archivo…</button>
       <input type="file" id="reFile" accept=".xlsx,.xls" class="hidden">
     </div>
@@ -218,11 +225,37 @@
 // ======================================================================
 const REPO = "Ntafur/tablero-autorizaciones";
 const FILE = "datos_tablero.xlsx";
+// Fuentes de respaldo (archivo de ejemplo del repo) si aún no se ha conectado OneDrive
 const SOURCES = [
   FILE,  // relativo: funciona si el HTML y el Excel se sirven juntos (GitHub Pages, servidor local)
   "https://raw.githubusercontent.com/" + REPO + "/main/" + FILE,
-  "https://raw.githubusercontent.com/" + REPO + "/claude/trusting-bardeen-stgsvv/" + FILE,
 ];
+const STORAGE_KEY = "td_onedrive_url";   // recuerda el enlace de OneDrive en este navegador
+
+// Convierte un enlace "Compartir" de OneDrive/SharePoint en una URL de descarga directa
+function toDirectDownload(raw){
+  var u = (raw||"").trim();
+  if(!u) return u;
+  try{
+    // OneDrive personal (1drv.ms / onedrive.live.com): API de shares anónima
+    if(/1drv\.ms|onedrive\.live\.com/i.test(u)){
+      var b64 = btoa(unescape(encodeURIComponent(u)));
+      var enc = "u!" + b64.replace(/=+$/,"").replace(/\//g,"_").replace(/\+/g,"-");
+      return "https://api.onedrive.com/v1.0/shares/" + enc + "/root/content";
+    }
+    // OneDrive Empresarial / SharePoint: forzar descarga directa
+    if(/sharepoint\.com/i.test(u)){
+      if(/[?&]download=1(\b|$)/.test(u)) return u;
+      return u + (u.indexOf("?")>=0 ? "&" : "?") + "download=1";
+    }
+  }catch(e){ /* usa la URL tal cual */ }
+  return u;
+}
+// Lee un enlace embebido en la URL del tablero (#data=... o ?data=...)
+function getParamUrl(){ try{ var m=/[?#&]data=([^&]+)/.exec(location.href); return m?decodeURIComponent(m[1]):""; }catch(e){ return ""; } }
+function getSaved(){ try{ return localStorage.getItem(STORAGE_KEY)||""; }catch(e){ return ""; } }
+function setSaved(v){ try{ if(v) localStorage.setItem(STORAGE_KEY,v); else localStorage.removeItem(STORAGE_KEY); }catch(e){} }
+let SHARE_LINK = "";   // enlace original de OneDrive en uso (sin transformar)
 
 // ======================================================================
 // Utilidades de formato (no dependen de los datos)
@@ -331,6 +364,8 @@ function setData(DATA, sourceLabel){
   G.sortState={col:C.d,dir:-1}; G.page=0;
   populateFilters();
   document.getElementById("srcChip").innerHTML = "Origen: <b>"+sourceLabel+"</b> · "+int(DATA.rows.length)+" registros";
+  document.getElementById("shareBtn").style.display = SHARE_LINK ? "" : "none";
+  document.getElementById("forgetBtn").style.display = SHARE_LINK ? "" : "none";
   document.getElementById("gate").classList.add("hidden");
   document.getElementById("app").classList.remove("hidden");
   renderHeaderBadges();
@@ -606,28 +641,57 @@ async function loadFromUrl(url, label){
   const buf=await resp.arrayBuffer();
   loadFromBuffer(buf, label||url);
 }
+function showManual(){ document.getElementById("gateLoading").classList.add("hidden"); document.getElementById("gateManual").classList.remove("hidden"); }
+function showOneDriveFallback(shareUrl, err){
+  showManual();
+  document.getElementById("odInput").value = shareUrl || "";
+  if(shareUrl){ document.getElementById("odOpenLink").href = toDirectDownload(shareUrl); document.getElementById("odOpen").classList.remove("hidden"); }
+  const e=document.getElementById("gateErr"); e.style.display="block";
+  e.innerHTML = "El navegador no pudo descargar el archivo desde OneDrive ("+(err&&err.message?err.message:"bloqueo de seguridad/CORS")+
+    "). Pulsa <b>“Abrir y descargar desde OneDrive”</b> y luego arrastra el archivo aquí abajo. Verifica también que el enlace sea de tipo “Cualquiera con el enlace”.";
+}
+async function loadOneDrive(shareUrl, save){
+  SHARE_LINK = shareUrl;
+  if(save) setSaved(shareUrl);
+  document.getElementById("gateManual").classList.add("hidden");
+  document.getElementById("gateLoading").classList.remove("hidden");
+  gateStatus("Conectando con OneDrive…");
+  try{ await loadFromUrl(toDirectDownload(shareUrl), "OneDrive"); }
+  catch(err){ showOneDriveFallback(shareUrl, err); }
+}
 async function autoLoad(){
   if(typeof XLSX==="undefined"){ showGateError("No se cargó la librería SheetJS (necesaria para leer Excel). Verifica la conexión a internet y recarga."); return; }
+  const explicit=getParamUrl(), saved=getSaved(), primary=explicit||saved;
+  if(explicit) setSaved(explicit);
+  if(primary){ document.getElementById("odInput").value=primary; await loadOneDrive(primary, false); return; }
+  // Sin enlace de OneDrive todavía: intenta el archivo de ejemplo del repositorio
   for(let i=0;i<SOURCES.length;i++){
-    const url=SOURCES[i];
-    try{
-      gateStatus("Intentando: "+url);
-      await loadFromUrl(url, (i===0?"repositorio ("+FILE+")":url));
-      return; // éxito
-    }catch(err){ /* intenta la siguiente fuente */ }
+    try{ gateStatus("Cargando ejemplo: "+SOURCES[i]); await loadFromUrl(SOURCES[i], (i===0?"ejemplo del repositorio":SOURCES[i])); return; }
+    catch(err){ /* siguiente */ }
   }
-  showGateError("No se pudo descargar "+FILE+" automáticamente (repo privado, sin conexión o abierto desde el disco). Cárgalo manualmente.");
+  showManual();   // muestra el conector de OneDrive
 }
 
-// Controles manuales del gate
+// Controles del gate
 document.getElementById("pickBtn").addEventListener("click",function(){ document.getElementById("fileInput").click(); });
 document.getElementById("fileInput").addEventListener("change",function(e){ const f=e.target.files[0]; if(f) loadFromFile(f); });
-document.getElementById("urlBtn").addEventListener("click",function(){ const u=document.getElementById("urlInput").value.trim();
-  if(u){ document.getElementById("gateErr").style.display="none"; loadFromUrl(u).catch(function(err){ showGateError("No se pudo cargar la URL: "+err.message); }); } });
+document.getElementById("odBtn").addEventListener("click",function(){ const u=document.getElementById("odInput").value.trim();
+  if(u){ document.getElementById("gateErr").style.display="none"; document.getElementById("odOpen").classList.add("hidden"); loadOneDrive(u, true); } });
+document.getElementById("odInput").addEventListener("keydown",function(e){ if(e.key==="Enter") document.getElementById("odBtn").click(); });
 const dz=document.getElementById("dropzone");
 ["dragenter","dragover"].forEach(function(ev){ dz.addEventListener(ev,function(e){ e.preventDefault(); dz.classList.add("drag"); }); });
 ["dragleave","drop"].forEach(function(ev){ dz.addEventListener(ev,function(e){ e.preventDefault(); dz.classList.remove("drag"); }); });
 dz.addEventListener("drop",function(e){ const f=e.dataTransfer.files[0]; if(f) loadFromFile(f); });
+
+// Compartir / olvidar el enlace de OneDrive
+document.getElementById("shareBtn").addEventListener("click",function(){
+  const link=location.origin+location.pathname+"#data="+encodeURIComponent(SHARE_LINK);
+  const btn=document.getElementById("shareBtn");
+  (navigator.clipboard&&navigator.clipboard.writeText ? navigator.clipboard.writeText(link) : Promise.reject())
+    .then(function(){ btn.textContent="¡Enlace copiado!"; setTimeout(function(){btn.textContent="Copiar enlace del tablero";},1800); })
+    .catch(function(){ window.prompt("Copia el enlace del tablero:", link); });
+});
+document.getElementById("forgetBtn").addEventListener("click",function(){ setSaved(""); SHARE_LINK=""; location.href=location.origin+location.pathname; });
 
 if(!hasChart){ ["chTiempo","chCierre","chTipo","chUsuCount","chUsuValor","chFuente","chResp"].forEach(noChart); }
 autoLoad();
